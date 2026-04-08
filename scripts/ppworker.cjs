@@ -176,7 +176,7 @@ const main = async () => {
     await updatePackage(name, showName, version, id)
     // update config.json
     await updateConfig(ppconfig.more.windows, ppconfig.desktop)
-    // create mac icon
+    // edit mac icon
     const iconPath = path.join(__dirname, '../', 'app-icon.png')
     const tempPath = path.join(__dirname, '../', 'processed-image.png')
     const icnsPath = path.join(__dirname, '../', 'icons', 'icon.icns')
