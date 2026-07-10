@@ -4709,26 +4709,52 @@ PPT主题：${outline.title}
                     const safeName = topic.replace(/[<>:"/\\|?*]/g, '_').slice(0, 30);
                     const fileName = `${safeName || 'AI_PPT'}_${new Date().toISOString().slice(0,10)}.pptx`;
                     
-                    await pptx.writeFile({ fileName: fileName });
+                    console.log('开始导出PPTX文件:', fileName);
+                    
+                    // 使用writeFile导出，PptxGenJS会自动触发浏览器下载
+                    const result = await pptx.writeFile({ fileName: fileName });
                     
                     setStatus(`PPTX导出成功！共${slidesSucceeded}页`);
                     if (slidesFailed > 0) {
-                        showToast(`PPTX导出成功！${slidesFailed}页因错误跳过`, 'warning');
+                        showToast(`PPTX导出成功！${slidesFailed}页因错误跳过，文件已开始下载`, 'warning');
                     } else {
-                        showToast('PPTX文件已开始下载', 'success');
+                        showToast('PPTX文件已开始下载，请查看浏览器下载栏', 'success');
                     }
                 } catch (writeErr) {
                     console.error('写入PPTX文件失败:', writeErr);
-                    // 最后尝试：不带图片的纯文本版本
-                    showToast('导出遇到问题，正在尝试纯文本版本...', 'warning');
-                    throw writeErr;
+                    
+                    // 备用方案：尝试生成Blob并手动创建下载链接
+                    try {
+                        showToast('正在尝试备用导出方式...', 'info');
+                        const blob = await pptx.writeFile({ outputType: 'blob' });
+                        const topicInput = document.getElementById('topicInput');
+                        const topic = (topicInput && topicInput.value) ? topicInput.value.trim() : '';
+                        const safeName = topic.replace(/[<>:"/\\|?*]/g, '_').slice(0, 30);
+                        const fileName = `${safeName || 'AI_PPT'}_${new Date().toISOString().slice(0,10)}.pptx`;
+                        
+                        // 创建下载链接
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = fileName;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        setTimeout(() => URL.revokeObjectURL(url), 1000);
+                        
+                        showToast('PPTX文件已开始下载', 'success');
+                        setStatus(`PPTX导出成功！共${slidesSucceeded}页`);
+                    } catch (backupErr) {
+                        console.error('备用导出也失败:', backupErr);
+                        showToast('导出失败，请尝试刷新页面后重试', 'error');
+                        setStatus('导出失败');
+                    }
                 }
                 
             } catch (e) {
-                console.error('导出失败:', e);
-                // 错误提示不显示具体技术细节给用户
-                showToast('导出PPTX成功！如果个别图片未显示不影响使用', 'success');
-                setStatus('导出完成');
+                console.error('导出过程出错:', e);
+                showToast('导出过程中遇到问题，请重试', 'error');
+                setStatus('导出失败');
             }
         }
 
