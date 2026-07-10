@@ -1966,18 +1966,130 @@ PPT主题：${outline.title}
         }
 
         // ==================== 导出PPTX ====================
+        // 用Canvas生成美观的渐变占位图（data URL格式，无需网络）
+        function generatePlaceholderImage(title, accentColor) {
+            try {
+                const canvas = document.createElement('canvas');
+                canvas.width = 800;
+                canvas.height = 600;
+                const ctx = canvas.getContext('2d');
+                
+                // 解析颜色
+                const hex = accentColor.replace('#', '');
+                const r = parseInt(hex.substr(0, 2), 16);
+                const g = parseInt(hex.substr(2, 2), 16);
+                const b = parseInt(hex.substr(4, 2), 16);
+                
+                // 渐变背景
+                const gradient = ctx.createLinearGradient(0, 0, 800, 600);
+                gradient.addColorStop(0, `rgb(${r}, ${g}, ${b})`);
+                gradient.addColorStop(1, `rgb(${Math.max(0,r-40)}, ${Math.max(0,g-40)}, ${Math.max(0,b-40)})`);
+                ctx.fillStyle = gradient;
+                ctx.fillRect(0, 0, 800, 600);
+                
+                // 装饰图案 - 几何图形
+                ctx.globalAlpha = 0.1;
+                ctx.fillStyle = '#FFFFFF';
+                ctx.beginPath();
+                ctx.arc(700, 100, 120, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(100, 500, 80, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.globalAlpha = 1;
+                
+                // 图标背景
+                ctx.fillStyle = 'rgba(255,255,255,0.2)';
+                ctx.beginPath();
+                ctx.arc(400, 220, 70, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // 简单图标
+                ctx.fillStyle = '#FFFFFF';
+                ctx.font = 'bold 50px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('📊', 400, 220);
+                
+                // 标题文字
+                ctx.font = 'bold 28px "Microsoft YaHei", sans-serif';
+                ctx.fillStyle = '#FFFFFF';
+                const displayTitle = title.length > 20 ? title.slice(0, 20) + '...' : title;
+                ctx.fillText(displayTitle, 400, 340);
+                
+                // 副标题
+                ctx.font = '16px "Microsoft YaHei", sans-serif';
+                ctx.globalAlpha = 0.8;
+                ctx.fillText('AI智能PPT生成', 400, 390);
+                
+                return canvas.toDataURL('image/png');
+            } catch (e) {
+                console.error('生成占位图失败:', e);
+                return null;
+            }
+        }
+
+        // 检测图片URL是否可访问
+        async function checkImageUrl(url) {
+            if (!url) return false;
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 3000);
+                await fetch(url, { 
+                    method: 'HEAD', 
+                    signal: controller.signal,
+                    mode: 'no-cors'
+                });
+                clearTimeout(timeoutId);
+                return true;
+            } catch (e) {
+                console.log('图片不可访问:', url);
+                return false;
+            }
+        }
+
         async function exportPPT() {
             if (slides.length === 0) {
                 showToast('请先生成PPT', 'error');
                 return;
             }
             
-            showToast('正在生成PPTX文件...', 'info');
-            setStatus('正在导出PPTX...');
+            showToast('正在准备导出...', 'info');
+            setStatus('正在准备导出...');
             
             try {
-                const pptx = new PptxGenJS();
                 const style = STYLES[currentStyle];
+                
+                // 第一步：准备所有图片，不可访问的用占位图代替
+                const useRealImages = document.getElementById('useRealImages').checked;
+                let failedImageCount = 0;
+                
+                for (let i = 0; i < slides.length; i++) {
+                    const slide = slides[i];
+                    slide._exportImage = null;
+                    
+                    if (slide.imageUrl && useRealImages) {
+                        const ok = await checkImageUrl(slide.imageUrl);
+                        if (ok) {
+                            slide._exportImage = slide.imageUrl;
+                        } else {
+                            failedImageCount++;
+                            // 用Canvas生成占位图data URL
+                            slide._exportImage = generatePlaceholderImage(slide.title || 'PPT', style.accentColor);
+                        }
+                    } else if (slide.imageUrl) {
+                        // 不使用真实图片时也生成占位图，确保排版美观
+                        slide._exportImage = generatePlaceholderImage(slide.title || 'PPT', style.accentColor);
+                    }
+                }
+                
+                if (failedImageCount > 0) {
+                    showToast(`${failedImageCount}张图片无法访问，已使用占位图代替`, 'warning');
+                }
+                
+                setStatus('正在生成PPTX文件...');
+            
+                const pptx = new PptxGenJS();
                 
                 // 设置PPT属性
                 pptx.layout = 'LAYOUT_WIDE'; // 16:9
@@ -1998,10 +2110,11 @@ PPT主题：${outline.title}
                     
                     if (slide.type === 'cover') {
                         // 封面页
-                        if (slide.imageUrl && document.getElementById('useRealImages').checked) {
+                        const coverHasImage = !!slide._exportImage;
+                        if (coverHasImage) {
                             try {
                                 pptSlide.addImage({
-                                    path: slide.imageUrl,
+                                    path: slide._exportImage,
                                     x: 0, y: 0, w: '100%', h: '100%'
                                 });
                                 // 半透明遮罩
@@ -2010,22 +2123,33 @@ PPT主题：${outline.title}
                                     fill: { color: '000000', transparency: 50 }
                                 });
                             } catch (e) {
-                                console.log('封面图片添加失败');
+                                console.log('封面图片添加失败，使用纯色背景', e);
+                                coverHasImage = false;
                             }
-                        } else {
-                            // 渐变装饰
+                        }
+                        
+                        if (!coverHasImage) {
+                            // 纯色背景 + 装饰条
                             pptSlide.addShape(pptx.ShapeType.rect, {
-                                x: 0, y: 0, w: '100%', h: 0.1,
+                                x: 0, y: 0, w: '100%', h: 0.12,
+                                fill: { color: accentColor }
+                            });
+                            pptSlide.addShape(pptx.ShapeType.rect, {
+                                x: 0, y: 7.38, w: '100%', h: 0.12,
                                 fill: { color: accentColor }
                             });
                         }
+                        
+                        // 主标题颜色：有图片用白色，无图片用主题色
+                        const coverTitleColor = coverHasImage ? 'FFFFFF' : titleColor;
+                        const coverSubtitleColor = coverHasImage ? 'E0E0E0' : textColor;
                         
                         // 主标题
                         pptSlide.addText(slide.title || '', {
                             x: 0.5, y: 2.5, w: 12.3, h: 1.2,
                             fontSize: 44,
                             bold: true,
-                            color: 'FFFFFF',
+                            color: coverTitleColor,
                             align: 'center',
                             valign: 'middle',
                             fontFace: style.headingFont
@@ -2036,8 +2160,8 @@ PPT主题：${outline.title}
                             pptSlide.addText(slide.subtitle, {
                                 x: 0.5, y: 3.8, w: 12.3, h: 0.8,
                                 fontSize: 22,
-                                color: 'FFFFFF',
-                                transparency: 20,
+                                color: coverSubtitleColor,
+                                transparency: coverHasImage ? 10 : 0,
                                 align: 'center',
                                 valign: 'middle',
                                 fontFace: style.bodyFont
@@ -2133,7 +2257,7 @@ PPT主题：${outline.title}
                         
                     } else {
                         // 内容页
-                        const hasImage = slide.imageUrl && document.getElementById('useRealImages').checked;
+                        const hasImage = !!slide._exportImage;
                         const textW = hasImage ? 6.8 : 12.0;
                         const textX = 0.6;
                         
@@ -2268,10 +2392,10 @@ PPT主题：${outline.title}
                         });
                         
                         // 图片
-                        if (hasImage) {
+                        if (hasImage && slide._exportImage) {
                             try {
                                 pptSlide.addImage({
-                                    path: slide.imageUrl,
+                                    path: slide._exportImage,
                                     x: 7.8, y: 1.4, w: 5.0, h: 4.5,
                                     rounding: true
                                 });
