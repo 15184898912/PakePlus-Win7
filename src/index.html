@@ -4327,6 +4327,23 @@ PPT主题：${outline.title}
                 return;
             }
             
+            // 检测PptxGenJS库是否正确加载
+            if (typeof PptxGenJS === 'undefined') {
+                showToast('PPT导出库加载失败，请刷新页面重试', 'error');
+                setStatus('导出库未加载');
+                console.error('PptxGenJS is not defined! pptxgen.bundle.js may not have loaded correctly.');
+                alert('PPT导出库未正确加载！\n\n可能原因：\n1. pptxgen.bundle.js文件缺失或损坏\n2. 浏览器安全限制（file://协议）\n\n建议：\n1. 使用「启动PPT生成器.bat」启动（推荐）\n2. 或用Chrome/Edge浏览器打开\n3. 确保pptxgen.bundle.js与index.html在同一文件夹');
+                return;
+            }
+            
+            // 检测是否在file://协议下运行
+            const isFileProtocol = window.location.protocol === 'file:';
+            if (isFileProtocol) {
+                console.warn('Running under file:// protocol, may have browser security restrictions');
+                // 不阻止，但给出提示
+                showToast('检测到直接打开HTML文件，如导出失败请用启动脚本打开', 'warning');
+            }
+            
             showToast('正在准备导出...', 'info');
             setStatus('正在准备导出...');
             
@@ -4334,9 +4351,7 @@ PPT主题：${outline.title}
             try {
                 const style = STYLES[currentStyle];
                 
-                // 第一步：为所有页面准备图片
-                const useRealImagesCheckbox = document.getElementById('useRealImages');
-                const useRealImages = useRealImagesCheckbox ? useRealImagesCheckbox.checked : false;
+                // 第一步：为所有页面准备图片 - 纯Canvas生成，不依赖网络
                 let failedImageCount = 0;
                 
                 for (let i = 0; i < slides.length; i++) {
@@ -4344,29 +4359,13 @@ PPT主题：${outline.title}
                     const pageType = slide.type === 'cover' ? 'cover' : 'content';
                     
                     try {
-                        // 默认生成AI智能精美配图（Canvas生成，data URL，无需网络，100%可用）
-                        let finalImage = generatePlaceholderImage(slide.title || 'PPT', style.accentColor, pageType);
-                        
-                        // 如果用户勾选了网络真实彩图，尝试加载网络图片
-                        if (useRealImages && slide.imageUrl) {
-                            const ok = await preloadImage(slide.imageUrl, 4000);
-                            if (ok) {
-                                finalImage = slide.imageUrl;
-                            } else {
-                                failedImageCount++;
-                                // 网络图片失败，已经有精美配图兜底
-                            }
-                        }
-                        
-                        slide._exportImage = finalImage;
-                    } catch (e) {
-                        console.log('处理图片时出错，使用AI精美配图:', e);
+                        // 始终使用Canvas生成的精美配图（data URL，100%可用）
                         slide._exportImage = generatePlaceholderImage(slide.title || 'PPT', style.accentColor, pageType);
+                    } catch (e) {
+                        console.log('生成配图失败，跳过图片:', e);
+                        slide._exportImage = null;
+                        failedImageCount++;
                     }
-                }
-                
-                if (failedImageCount > 0) {
-                    showToast(`${failedImageCount}张网络图片无法加载，已使用内置配图`, 'warning');
                 }
                 
                 setStatus('正在生成PPTX文件...');
@@ -4376,6 +4375,8 @@ PPT主题：${outline.title}
                 // 设置PPT属性
                 pptx.layout = 'LAYOUT_WIDE'; // 16:9
                 pptx.title = (slides[0] && slides[0].title) ? slides[0].title : 'AI生成PPT';
+                pptx.author = 'AI智能PPT生成器';
+                pptx.company = 'AI PPT';
                 
                 const isDark = isDarkStyle();
                 const textColor = isDark ? 'FFFFFF' : style.textColor;
@@ -4400,359 +4401,321 @@ PPT主题：${outline.title}
                         }
                         
                         if (slide.type === 'cover') {
-                            // 封面页
-                            let coverHasImage = false;
+                            // 封面页 - 纯色背景 + 装饰条，不使用图片避免问题
+                            pptSlide.addShape(pptx.ShapeType.rect, {
+                                x: 0, y: 0, w: '100%', h: 0.15,
+                                fill: { color: accentColor }
+                            });
+                            pptSlide.addShape(pptx.ShapeType.rect, {
+                                x: 0, y: 7.35, w: '100%', h: 0.15,
+                                fill: { color: accentColor }
+                            });
                             
-                            if (slide._exportImage) {
-                                coverHasImage = safeAddImage(pptSlide, {
-                                    path: slide._exportImage,
-                                    x: 0, y: 0, w: '100%', h: '100%'
-                                });
-                                
-                                if (coverHasImage) {
-                                    // 半透明遮罩
-                                    try {
-                                        pptSlide.addShape(pptx.ShapeType.rect, {
-                                            x: 0, y: 0, w: '100%', h: '100%',
-                                            fill: { color: '000000', transparency: 50 }
-                                        });
-                                    } catch (e) {}
-                                }
-                            }
-                        
-                        if (!coverHasImage) {
-                            // 纯色背景 + 装饰条
-                            pptSlide.addShape(pptx.ShapeType.rect, {
-                                x: 0, y: 0, w: '100%', h: 0.12,
-                                fill: { color: accentColor }
+                            // 角落装饰
+                            pptSlide.addShape(pptx.ShapeType.ellipse, {
+                                x: 11.5, y: 0.5, w: 1.5, h: 1.5,
+                                fill: { color: accentColor, transparency: 70 }
                             });
-                            pptSlide.addShape(pptx.ShapeType.rect, {
-                                x: 0, y: 7.38, w: '100%', h: 0.12,
-                                fill: { color: accentColor }
+                            pptSlide.addShape(pptx.ShapeType.ellipse, {
+                                x: 0.3, y: 5.8, w: 1.0, h: 1.0,
+                                fill: { color: accentColor, transparency: 70 }
                             });
-                        }
-                        
-                        // 主标题颜色：有图片用白色，无图片用主题色
-                        const coverTitleColor = coverHasImage ? 'FFFFFF' : titleColor;
-                        const coverSubtitleColor = coverHasImage ? 'E0E0E0' : textColor;
-                        
-                        // 主标题
-                        pptSlide.addText(slide.title || '', {
-                            x: 0.5, y: 2.5, w: 12.3, h: 1.2,
-                            fontSize: 44,
-                            bold: true,
-                            color: coverTitleColor,
-                            align: 'center',
-                            valign: 'middle',
-                            fontFace: style.headingFont
-                        });
-                        
-                        // 副标题
-                        if (slide.subtitle) {
-                            pptSlide.addText(slide.subtitle, {
-                                x: 0.5, y: 3.8, w: 12.3, h: 0.8,
-                                fontSize: 22,
-                                color: coverSubtitleColor,
-                                transparency: coverHasImage ? 10 : 0,
+                            
+                            const coverTitleColor = titleColor;
+                            const coverSubtitleColor = textColor;
+                            
+                            // 主标题
+                            pptSlide.addText(slide.title || '', {
+                                x: 0.5, y: 2.2, w: 12.3, h: 1.5,
+                                fontSize: 42,
+                                bold: true,
+                                color: coverTitleColor,
                                 align: 'center',
                                 valign: 'middle',
-                                fontFace: style.bodyFont
+                                fontFace: '微软雅黑'
                             });
-                        }
-                        
-                    } else if (slide.type === 'toc') {
-                        // 目录页
-                        // 左侧装饰条
-                        pptSlide.addShape(pptx.ShapeType.rect, {
-                            x: 0, y: 0, w: 0.15, h: '100%',
-                            fill: { color: accentColor }
-                        });
-                        
-                        // 标题
-                        pptSlide.addText(slide.title || '目录', {
-                            x: 0.6, y: 0.4, w: 12, h: 0.8,
-                            fontSize: 32,
-                            bold: true,
-                            color: titleColor,
-                            fontFace: style.headingFont
-                        });
-                        
-                        // 标题下划线
-                        pptSlide.addShape(pptx.ShapeType.rect, {
-                            x: 0.6, y: 1.2, w: 2, h: 0.05,
-                            fill: { color: accentColor }
-                        });
-                        
-                        // 目录项
-                        const items = (slide.content || '').split('\n').map(s => s.trim()).filter(Boolean);
-                        const tocFontSize = items.length > 8 ? 14 : (items.length > 6 ? 16 : 18);
-                        const tocSpacing = items.length > 8 ? 0.5 : 0.65;
-                        
-                        items.forEach((item, idx) => {
-                            const y = 1.8 + idx * tocSpacing;
                             
-                            // 序号圆形
-                            pptSlide.addShape(pptx.ShapeType.ellipse, {
-                                x: 1.2, y: y, w: 0.4, h: 0.4,
+                            // 副标题
+                            if (slide.subtitle) {
+                                pptSlide.addText(slide.subtitle, {
+                                    x: 0.5, y: 3.9, w: 12.3, h: 0.8,
+                                    fontSize: 20,
+                                    color: coverSubtitleColor,
+                                    align: 'center',
+                                    valign: 'middle',
+                                    fontFace: '微软雅黑'
+                                });
+                            }
+                            
+                        } else if (slide.type === 'toc') {
+                            // 目录页
+                            pptSlide.addShape(pptx.ShapeType.rect, {
+                                x: 0, y: 0, w: 0.15, h: '100%',
                                 fill: { color: accentColor }
                             });
                             
-                            pptSlide.addText(String(idx + 1), {
-                                x: 1.2, y: y, w: 0.4, h: 0.4,
-                                fontSize: tocFontSize - 2,
+                            pptSlide.addText(slide.title || '目录', {
+                                x: 0.6, y: 0.4, w: 12, h: 0.8,
+                                fontSize: 30,
                                 bold: true,
-                                color: 'FFFFFF',
+                                color: titleColor,
+                                fontFace: '微软雅黑'
+                            });
+                            
+                            pptSlide.addShape(pptx.ShapeType.rect, {
+                                x: 0.6, y: 1.2, w: 2, h: 0.05,
+                                fill: { color: accentColor }
+                            });
+                            
+                            const items = (slide.content || '').split('\n').map(s => s.trim()).filter(Boolean);
+                            const tocFontSize = items.length > 8 ? 14 : (items.length > 6 ? 16 : 18);
+                            const tocSpacing = items.length > 8 ? 0.5 : 0.65;
+                            
+                            const safeItems = items.slice(0, 12);
+                            safeItems.forEach((item, idx) => {
+                                const y = 1.8 + idx * tocSpacing;
+                                const displayItem = item.length > 60 ? item.substring(0, 60) + '...' : item;
+                                
+                                pptSlide.addShape(pptx.ShapeType.ellipse, {
+                                    x: 1.2, y: y, w: 0.4, h: 0.4,
+                                    fill: { color: accentColor }
+                                });
+                                
+                                pptSlide.addText(String(idx + 1), {
+                                    x: 1.2, y: y, w: 0.4, h: 0.4,
+                                    fontSize: Math.max(12, tocFontSize - 4),
+                                    bold: true,
+                                    color: 'FFFFFF',
+                                    align: 'center',
+                                    valign: 'middle'
+                                });
+                                
+                                pptSlide.addText(displayItem, {
+                                    x: 1.9, y: y, w: 10, h: 0.5,
+                                    fontSize: tocFontSize,
+                                    color: textColor,
+                                    valign: 'middle',
+                                    fontFace: '微软雅黑'
+                                });
+                            });
+                            
+                        } else if (slide.type === 'ending') {
+                            // 结尾页
+                            pptSlide.addShape(pptx.ShapeType.rect, {
+                                x: 0, y: 0, w: '100%', h: 0.15,
+                                fill: { color: accentColor }
+                            });
+                            pptSlide.addShape(pptx.ShapeType.rect, {
+                                x: 0, y: 7.35, w: '100%', h: 0.15,
+                                fill: { color: accentColor }
+                            });
+                            
+                            pptSlide.addShape(pptx.ShapeType.rect, {
+                                x: 5.5, y: 3.1, w: 2.3, h: 0.05,
+                                fill: { color: accentColor }
+                            });
+                            
+                            pptSlide.addText(slide.title || '谢谢观看', {
+                                x: 0.5, y: 2.8, w: 12.3, h: 1.2,
+                                fontSize: 44,
+                                bold: true,
+                                color: titleColor,
                                 align: 'center',
+                                valign: 'middle',
+                                fontFace: '微软雅黑'
+                            });
+                            
+                            if (slide.content) {
+                                pptSlide.addText(slide.content, {
+                                    x: 0.5, y: 4.2, w: 12.3, h: 0.8,
+                                    fontSize: 20,
+                                    color: textColor,
+                                    align: 'center',
+                                    valign: 'middle',
+                                    fontFace: '微软雅黑'
+                                });
+                            }
+                            
+                        } else {
+                            // 内容页 - 纯文字布局，最稳定
+                            const textW = 12.0;
+                            const textX = 0.6;
+                            
+                            pptSlide.addShape(pptx.ShapeType.rect, {
+                                x: 0, y: 0, w: '100%', h: 0.08,
+                                fill: { color: accentColor }
+                            });
+                            
+                            pptSlide.addText(slide.title || '', {
+                                x: textX, y: 0.25, w: textW, h: 0.8,
+                                fontSize: 24,
+                                bold: true,
+                                color: titleColor,
+                                fontFace: '微软雅黑',
                                 valign: 'middle'
                             });
                             
-                            pptSlide.addText(item, {
-                                x: 1.9, y: y, w: 10, h: 0.5,
-                                fontSize: tocFontSize,
-                                color: textColor,
-                                valign: 'middle',
-                                fontFace: style.bodyFont
+                            pptSlide.addShape(pptx.ShapeType.rect, {
+                                x: textX, y: 1.05, w: 1.8, h: 0.04,
+                                fill: { color: accentColor }
                             });
-                        });
-                        
-                    } else if (slide.type === 'ending') {
-                        // 结尾页
-                        pptSlide.addShape(pptx.ShapeType.rect, {
-                            x: 0, y: 0, w: 0.3, h: '100%',
-                            fill: { color: accentColor }
-                        });
-                        pptSlide.addShape(pptx.ShapeType.rect, {
-                            x: 0, y: 7.2, w: '100%', h: 0.3,
-                            fill: { color: titleColor }
-                        });
-                        
-                        pptSlide.addText(slide.title || '感谢观看', {
-                            x: 0.5, y: 2.5, w: 12.3, h: 1.2,
-                            fontSize: 40,
-                            bold: true,
-                            color: titleColor,
-                            align: 'center',
-                            valign: 'middle',
-                            fontFace: style.headingFont
-                        });
-                        
-                        if (slide.content) {
-                            pptSlide.addText(slide.content, {
-                                x: 0.5, y: 4, w: 12.3, h: 1,
-                                fontSize: 20,
-                                color: textColor,
-                                align: 'center',
-                                valign: 'middle',
-                                fontFace: style.bodyFont
+                            
+                            // 页码
+                            pptSlide.addText(String(i + 1), {
+                                x: 12.0, y: 7.0, w: 1.0, h: 0.4,
+                                fontSize: 10,
+                                color: '999999',
+                                align: 'right'
                             });
-                        }
-                        
-                    } else {
-                        // 内容页
-                        const hasImage = !!slide._exportImage;
-                        const textW = hasImage ? 6.8 : 12.0;
-                        const textX = 0.6;
-                        
-                        // 顶部装饰条
-                        pptSlide.addShape(pptx.ShapeType.rect, {
-                            x: 0, y: 0, w: '100%', h: 0.08,
-                            fill: { color: accentColor }
-                        });
-                        
-                        // 标题
-                        pptSlide.addText(slide.title || '', {
-                            x: textX, y: 0.25, w: textW, h: 0.8,
-                            fontSize: 26,
-                            bold: true,
-                            color: titleColor,
-                            fontFace: style.headingFont,
-                            valign: 'middle',
-                            margin: 0
-                        });
-                        
-                        // 标题装饰线
-                        pptSlide.addShape(pptx.ShapeType.rect, {
-                            x: textX, y: 1.1, w: 1.8, h: 0.04,
-                            fill: { color: accentColor }
-                        });
-                        
-                        // 内容 - 超保守排版，绝对不重叠
-                        let rawContent = slide.content || '';
-                        
-                        // 第一步：智能分割成清晰的短要点
-                        let items = [];
-                        
-                        // 先按换行分割
-                        let lines = rawContent.split('\n').map(s => s.trim()).filter(s => s.length > 0);
-                        
-                        lines.forEach(line => {
-                            // 如果一行超过60字，强制按标点分割成短句
-                            if (line.length > 60) {
-                                const parts = line
-                                    .replace(/([。！？；，,])/g, '$1|SPLIT|')
-                                    .replace(/([\.\!\?;])/g, '$1|SPLIT|')
-                                    .split('|SPLIT|')
-                                    .map(s => s.trim())
-                                    .filter(s => s.length > 3);
-                                items = items.concat(parts);
-                            } else {
-                                items.push(line);
+                            
+                            // 内容分割
+                            let rawContent = slide.content || '';
+                            let items = [];
+                            
+                            let lines = rawContent.split('\n').map(s => s.trim()).filter(s => s.length > 0);
+                            lines.forEach(line => {
+                                if (line.length > 50) {
+                                    const parts = line
+                                        .replace(/([。！？；])/g, '$1|SPLIT|')
+                                        .split('|SPLIT|')
+                                        .map(s => s.trim())
+                                        .filter(s => s.length > 2);
+                                    items = items.concat(parts);
+                                } else {
+                                    items.push(line);
+                                }
+                            });
+                            
+                            items = items.map(item => {
+                                item = item.replace(/^[\-\•\*]\s*/, '');
+                                item = item.replace(/^\d+[\.、\)]\s*/, '');
+                                item = item.replace(/^[（(]\d+[)）]\s*/, '');
+                                return item.trim();
+                            }).filter(item => item.length > 1);
+                            
+                            const maxItems = 10;
+                            if (items.length > maxItems) {
+                                items = items.slice(0, maxItems);
                             }
-                        });
-                        
-                        // 清理所有前缀符号
-                        items = items.map(item => {
-                            item = item.replace(/^[\-\•\*]\s*/, '');
-                            item = item.replace(/^\d+[\.、\)]\s*/, '');
-                            item = item.replace(/^[（(]\d+[)）]\s*/, '');
-                            return item.trim();
-                        }).filter(item => item.length > 2);
-                        
-                        // 限制要点数量，确保不超出页面
-                        const maxItems = hasImage ? 6 : 10;
-                        if (items.length > maxItems) {
-                            items = items.slice(0, maxItems);
-                        }
-                        
-                        // 第二步：超大行高，确保任何情况下都不重叠
-                        const itemCount = items.length;
-                        let fontSize, itemHeight, totalHeight;
-                        
-                        // 计算可用高度（从1.3英寸开始到底部7.0英寸，约5.7英寸空间）
-                        const availableHeight = 5.7;
-                        
-                        if (hasImage) {
-                            // 有图片时，文字区域较窄，行高要更大
-                            if (itemCount <= 4) {
-                                fontSize = 15;
-                                itemHeight = 0.9;
-                            } else {
-                                fontSize = 13;
-                                itemHeight = 0.75;
+                            
+                            if (items.length === 0) {
+                                items = ['（内容）'];
                             }
-                        } else {
-                            // 无图片时，全宽显示
+                            
+                            const itemCount = items.length;
+                            let fontSize, itemHeight;
+                            const availableHeight = 5.7;
+                            
                             if (itemCount <= 5) {
-                                fontSize = 18;
+                                fontSize = 17;
                                 itemHeight = 1.0;
                             } else if (itemCount <= 7) {
-                                fontSize = 16;
+                                fontSize = 15;
                                 itemHeight = 0.8;
                             } else {
-                                fontSize = 14;
-                                itemHeight = 0.65;
+                                fontSize = 13;
+                                itemHeight = 0.62;
                             }
-                        }
-                        
-                        // 验证总高度不超过可用空间
-                        totalHeight = itemCount * itemHeight;
-                        if (totalHeight > availableHeight) {
-                            // 如果超出，按比例缩小itemHeight
-                            itemHeight = availableHeight / itemCount;
-                            // 同时缩小字体
-                            fontSize = Math.max(11, Math.floor(fontSize * 0.85));
-                        }
-                        
-                        // 第三步：逐行添加，每个要点独立定位，留出足够间距
-                        const startY = 1.35;
-                        
-                        items.forEach((item, idx) => {
-                            const y = startY + idx * itemHeight;
                             
-                            // 圆点项目符号 - 独立文本框，垂直居中
-                            pptSlide.addText('■', {
-                                x: textX, y: y + 0.05, w: 0.25, h: 0.3,
-                                fontSize: 10,
-                                color: accentColor,
-                                bold: true,
-                                valign: 'top',
-                                align: 'left',
-                                margin: 0
-                            });
+                            let totalHeight = itemCount * itemHeight;
+                            if (totalHeight > availableHeight) {
+                                itemHeight = availableHeight / itemCount;
+                                fontSize = Math.max(11, Math.floor(fontSize * 0.85));
+                            }
                             
-                            // 文字内容 - 独立文本框，高度留足，不wrap（因为我们已经分割成短句了）
-                            pptSlide.addText(item, {
-                                x: textX + 0.3, y: y, w: textW - 0.4, h: itemHeight - 0.05,
-                                fontSize: fontSize,
-                                color: textColor,
-                                fontFace: style.bodyFont,
-                                valign: 'top',
-                                margin: [2, 2, 2, 2],
-                                wrap: true,
-                                fit: 'shrink'
-                            });
-                        });
-                        
-                        // 图片 - 使用safeAddImage，失败不影响
-                        if (hasImage && slide._exportImage) {
-                            safeAddImage(pptSlide, {
-                                path: slide._exportImage,
-                                x: 7.8, y: 1.4, w: 5.0, h: 4.5,
-                                rounding: true
+                            const startY = 1.3;
+                            
+                            items.forEach((item, idx) => {
+                                const y = startY + idx * itemHeight;
+                                const displayItem = item.length > 100 ? item.substring(0, 100) + '...' : item;
+                                
+                                pptSlide.addText('■', {
+                                    x: textX, y: y + 0.06, w: 0.25, h: 0.3,
+                                    fontSize: 10,
+                                    color: accentColor,
+                                    bold: true
+                                });
+                                
+                                pptSlide.addText(displayItem, {
+                                    x: textX + 0.3, y: y, w: textW - 0.5, h: itemHeight - 0.05,
+                                    fontSize: fontSize,
+                                    color: textColor,
+                                    fontFace: '微软雅黑',
+                                    valign: 'top',
+                                    margin: [2, 2, 2, 2],
+                                    wrap: true
+                                });
                             });
                         }
-                    }
-                    
-                    slidesSucceeded++;
-                    
+                        
+                        slidesSucceeded++;
+                        
                     } catch (slideErr) {
-                        // 单页失败不影响整体导出
                         console.error(`第${i+1}页生成失败，跳过:`, slideErr);
                         slidesFailed++;
                     }
                 }
                 
-                // 导出文件
+                // 导出文件 - 优先使用Blob方式（兼容性最好）
                 try {
                     const topicInput = document.getElementById('topicInput');
                     const topic = (topicInput && topicInput.value) ? topicInput.value.trim() : '';
                     const safeName = topic.replace(/[<>:"/\\|?*]/g, '_').slice(0, 30);
                     const fileName = `${safeName || 'AI_PPT'}_${new Date().toISOString().slice(0,10)}.pptx`;
                     
-                    console.log('开始导出PPTX文件:', fileName);
+                    console.log('开始导出PPTX文件:', fileName, '页数:', slidesSucceeded);
                     
-                    // 使用writeFile导出，PptxGenJS会自动触发浏览器下载
-                    const result = await pptx.writeFile({ fileName: fileName });
+                    // 直接生成Blob并触发下载（最兼容的方式）
+                    const blob = await pptx.writeFile({ outputType: 'blob' });
+                    
+                    if (!blob || blob.size === 0) {
+                        throw new Error('生成的PPTX文件为空');
+                    }
+                    
+                    console.log('PPTX Blob生成成功，大小:', blob.size, 'bytes');
+                    
+                    // 创建下载链接
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = fileName;
+                    a.style.display = 'none';
+                    document.body.appendChild(a);
+                    a.click();
+                    
+                    // 延迟清理
+                    setTimeout(() => {
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                    }, 100);
                     
                     setStatus(`PPTX导出成功！共${slidesSucceeded}页`);
                     if (slidesFailed > 0) {
-                        showToast(`PPTX导出成功！${slidesFailed}页因错误跳过，文件已开始下载`, 'warning');
+                        showToast(`PPTX导出成功！${slidesFailed}页跳过，文件已开始下载`, 'warning');
                     } else {
                         showToast('PPTX文件已开始下载，请查看浏览器下载栏', 'success');
                     }
+                    
                 } catch (writeErr) {
                     console.error('写入PPTX文件失败:', writeErr);
                     
-                    // 备用方案：尝试生成Blob并手动创建下载链接
-                    try {
-                        showToast('正在尝试备用导出方式...', 'info');
-                        const blob = await pptx.writeFile({ outputType: 'blob' });
-                        const topicInput = document.getElementById('topicInput');
-                        const topic = (topicInput && topicInput.value) ? topicInput.value.trim() : '';
-                        const safeName = topic.replace(/[<>:"/\\|?*]/g, '_').slice(0, 30);
-                        const fileName = `${safeName || 'AI_PPT'}_${new Date().toISOString().slice(0,10)}.pptx`;
-                        
-                        // 创建下载链接
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = fileName;
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                        setTimeout(() => URL.revokeObjectURL(url), 1000);
-                        
-                        showToast('PPTX文件已开始下载', 'success');
-                        setStatus(`PPTX导出成功！共${slidesSucceeded}页`);
-                    } catch (backupErr) {
-                        console.error('备用导出也失败:', backupErr);
-                        showToast('导出失败，请尝试刷新页面后重试', 'error');
-                        setStatus('导出失败');
+                    let errorMsg = writeErr.message || writeErr.toString();
+                    
+                    // 针对常见错误给出提示
+                    if (errorMsg.includes('network') || errorMsg.includes('fetch') || errorMsg.includes('CORS')) {
+                        alert('导出失败：浏览器安全限制！\n\n请使用「启动PPT生成器.bat」启动应用，\n而不是直接双击index.html文件。\n\n直接以file://协议打开HTML时，\n浏览器会阻止PPTX导出功能。');
+                    } else {
+                        alert(`导出PPTX时出错：\n${errorMsg}\n\n建议：\n1. 使用「启动PPT生成器.bat」启动\n2. 刷新页面后重试\n3. 尝试减少页数`);
                     }
+                    
+                    showToast('导出失败，请查看弹出的错误提示', 'error');
+                    setStatus('导出失败');
                 }
                 
             } catch (e) {
                 console.error('导出过程出错:', e);
+                const errMsg = e.message || e.toString();
+                alert(`导出过程中遇到问题：\n${errMsg}\n\n建议：\n1. 使用「启动PPT生成器.bat」启动应用\n2. 刷新页面后重试\n3. 检查浏览器控制台获取详细错误`);
                 showToast('导出过程中遇到问题，请重试', 'error');
                 setStatus('导出失败');
             }
